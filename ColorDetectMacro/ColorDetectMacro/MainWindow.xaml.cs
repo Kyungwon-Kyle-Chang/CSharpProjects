@@ -1,20 +1,12 @@
 ﻿using System;
-using System.Collections.Generic;
 using System.Diagnostics;
-using System.Linq;
+using System.Drawing;
+using System.Drawing.Imaging;
+using System.Media;
 using System.Runtime.InteropServices;
-using System.Text;
-using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Data;
-using System.Windows.Documents;
-using System.Windows.Input;
-using System.Windows.Interop;
-using System.Windows.Media;
-using System.Windows.Media.Imaging;
-using System.Windows.Navigation;
-using System.Windows.Shapes;
+using System.Windows.Threading;
 
 namespace ColorDetectMacro
 {
@@ -25,6 +17,16 @@ namespace ColorDetectMacro
     {
         private TextBox[] _textBoxArray = new TextBox[8];
         private int _textBoxArrayIndex = 0;
+        private float msDelay = 1000f;
+
+        private int refreshX, refreshY;
+        private int vipStartX, vipStartY;
+        private int vipEndX, vipEndY;
+        private int proceedX, proceedY;
+        private int targetX, targetY;
+        private readonly int[] vipRGB = new int[3] { 149, 42, 224 };
+        private Bitmap screenPixel;
+        DispatcherTimer dispatcherTimer = new DispatcherTimer();
 
         public MainWindow()
         {
@@ -39,13 +41,19 @@ namespace ColorDetectMacro
             _textBoxArray[6] = ProceedX;
             _textBoxArray[7] = ProceedY;
 
+            dispatcherTimer.Tick += dispatcherTimer_Tick;
             MouseHook.Start();
         }
 
         private void MouseHook_MouseLClick(object sender, EventArgs e)
         {
-            _textBoxArray[_textBoxArrayIndex].Text = GetCursorPos().X.ToString();
-            _textBoxArray[_textBoxArrayIndex + 1].Text = GetCursorPos().Y.ToString();
+            Win32Point winPoint = new Win32Point();
+            GetCursorPos(ref winPoint);
+
+            int x = winPoint.X;
+            int y = winPoint.Y;
+            _textBoxArray[_textBoxArrayIndex].Text = x.ToString();
+            _textBoxArray[_textBoxArrayIndex + 1].Text = y.ToString();
 
             _textBoxArrayIndex += 2;
             if (_textBoxArrayIndex >= 8)
@@ -53,48 +61,114 @@ namespace ColorDetectMacro
                 MouseHook.MouseLClick -= MouseHook_MouseLClick;
                 _textBoxArrayIndex = 0;
             }
-
         }
 
-        private Point GetCursorPos()
+        private void MouseHook_MouseRClick(object sender, EventArgs e)
         {
-            Win32Point winPoint = new Win32Point();
-            GetCursorPos(ref winPoint);
-            Point point = ConvertPixelsToUnits(winPoint.X, winPoint.Y);
-            return point;
+            FinishTimer();
         }
 
-
-        private bool CheckColor()
+        private void dispatcherTimer_Tick(object sender, EventArgs e)
         {
+            Stopwatch sw = new Stopwatch();
+            sw.Start();
+            
+            SetCursorPos(refreshX, refreshY);
+            mouse_event(MOUSEEVENTF_LEFTDOWN | MOUSEEVENTF_LEFTUP, (uint)refreshX, (uint)refreshY, 0, 0);
+
+            POINT point;
+            if (!CheckColor(out point))
+            {
+                sw.Stop();
+                Elapsed.Text = sw.ElapsedMilliseconds.ToString();
+                return;
+            }
+
+            SetCursorPos(vipStartX + point.X, vipStartY + point.Y);
+            mouse_event(MOUSEEVENTF_LEFTDOWN | MOUSEEVENTF_LEFTUP, (uint)point.X, (uint)point.Y, 0, 0);
+
+            SetCursorPos(proceedX, proceedY);
+            mouse_event(MOUSEEVENTF_LEFTDOWN | MOUSEEVENTF_LEFTUP, (uint)proceedX, (uint)proceedY, 0, 0);
+
+            sw.Stop();
+            Elapsed.Text = sw.ElapsedMilliseconds.ToString();
+
+            if((bool)AlarmCheckBox.IsChecked) SystemSounds.Beep.Play();
+            FinishTimer();
+        }
+
+        private bool CheckColor(out POINT point)
+        {
+            GetColorAt(vipStartX, vipStartY);
+
+            for (int h = 0; h < vipEndY - vipStartY; h++)
+            {
+                for (int w = 0; w < vipEndX - vipStartX; w++) 
+                {
+                    Color pixelColor = screenPixel.GetPixel(w, h);
+                    if(CompareColor(pixelColor))
+                    {
+                        point = new POINT(w, h);
+                        return true;
+                    }
+                }
+            }
+
+            point = new POINT();
             return false;
+        }
+
+        private bool CompareColor(Color pixelColor)
+        {
+            return (pixelColor.R < vipRGB[0] + 10 && pixelColor.R > vipRGB[0] - 10) &&
+                    (pixelColor.G < vipRGB[1] + 10 && pixelColor.G > vipRGB[1] - 10) &&
+                    (pixelColor.B < vipRGB[2] + 10 && pixelColor.B > vipRGB[2] - 10);
+        }
+
+        private void FinishTimer()
+        {
+            dispatcherTimer.Stop();
+
+            MouseHook.MouseRClick -= MouseHook_MouseRClick;
         }
         //------------------------------------ UI Functions ----------------------------------
         private void SettingButton_Click(object sender, RoutedEventArgs e)
         {
+            for (int i = 0; i < _textBoxArray.Length; ++i)
+                _textBoxArray[i].Clear();
+
             MouseHook.MouseLClick += new EventHandler(MouseHook_MouseLClick);
         }
 
         private void PlayButton_Click(object sender, RoutedEventArgs e)
         {
-            int x, y;
+            refreshX = Convert.ToInt32(_textBoxArray[0].Text);
+            refreshY = Convert.ToInt32(_textBoxArray[1].Text);
+            vipStartX = Convert.ToInt32(_textBoxArray[2].Text);
+            vipStartY = Convert.ToInt32(_textBoxArray[3].Text);
+            vipEndX = Convert.ToInt32(_textBoxArray[4].Text);
+            vipEndY = Convert.ToInt32(_textBoxArray[5].Text);
+            proceedX = Convert.ToInt32(_textBoxArray[6].Text);
+            proceedY = Convert.ToInt32(_textBoxArray[7].Text);
+            targetX = Convert.ToInt32(TargetRow.Text);
+            targetY = Convert.ToInt32(TargetCol.Text);
 
-            x = Convert.ToInt32(_textBoxArray[0].Text);
-            y = Convert.ToInt32(_textBoxArray[1].Text);
-            SetCursorPos(x, y);
-            mouse_event(MOUSEEVENTF_LEFTDOWN | MOUSEEVENTF_LEFTUP, (uint)x, (uint)y, 0, 0);
+            screenPixel = new Bitmap(vipEndX - vipStartX, vipEndY - vipStartY, PixelFormat.Format32bppArgb);
 
-            if (!CheckColor()) return;
+            MouseHook.MouseRClick += new EventHandler(MouseHook_MouseRClick);
+            
+            dispatcherTimer.Interval = new TimeSpan(0, 0, 0, 0, (int)msDelay);
+            dispatcherTimer.Start();
+        }
 
-            //IntPtr hWnd = FindWindow("Notepad", null);
+        private void Delay_TextChanged(object sender, TextChangedEventArgs e)
+        {
+            if (float.TryParse(Delay.Text, out msDelay)) msDelay *= 1000;
+        }
 
-            //// If found, position it.
-            //if (hWnd != IntPtr.Zero)
-            //{
-            //    // Move the window to (0,0) without changing its size or position
-            //    // in the Z order.
-            //    SetWindowPos(hWnd, IntPtr.Zero, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
-            //}
+        private void StopButton_Click(object sender, RoutedEventArgs e)
+        {
+            FinishTimer();
         }
         //-------------------------------------------------------------------------------------
         #region MouseHook Class
@@ -102,6 +176,7 @@ namespace ColorDetectMacro
         {
             public static event EventHandler MouseMove = delegate { };
             public static event EventHandler MouseLClick = delegate { };
+            public static event EventHandler MouseRClick = delegate { };
 
             public static void Start()
             {
@@ -140,6 +215,11 @@ namespace ColorDetectMacro
                 {
                     MSLLHOOKSTRUCT hookStruct = (MSLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(MSLLHOOKSTRUCT));
                     MouseLClick(null, new EventArgs());
+                }
+                else if (nCode >= 0 && MouseMessages.WM_RBUTTONDOWN == (MouseMessages)wParam)
+                {
+                    MSLLHOOKSTRUCT hookStruct = (MSLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(MSLLHOOKSTRUCT));
+                    MouseRClick(null, new EventArgs());
                 }
                 return CallNextHookEx(_hookID, nCode, wParam, lParam);
             }
@@ -202,15 +282,6 @@ namespace ColorDetectMacro
         [return: MarshalAs(UnmanagedType.Bool)]
         internal static extern bool GetCursorPos(ref Win32Point pt);
 
-        [DllImport("User32.dll")]
-        static extern IntPtr GetDC(IntPtr hwnd);
-
-        [DllImport("gdi32.dll")]
-        static extern int GetDeviceCaps(IntPtr hdc, int nIndex);
-
-        [DllImport("user32.dll")]
-        static extern bool ReleaseDC(IntPtr hWnd, IntPtr hDC);
-
         [DllImport("user32.dll", CharSet = CharSet.Auto, CallingConvention = CallingConvention.StdCall)]
         public static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint cButtons, uint dwExtraInfo);
         private const int MOUSEEVENTF_LEFTDOWN = 0x02;
@@ -221,34 +292,38 @@ namespace ColorDetectMacro
         [DllImport("User32", EntryPoint = "SetCursorPos")]
         public static extern void SetCursorPos(int x, int y);
 
-        private Point ConvertPixelsToUnits(int x, int y)
+
+        [Serializable]
+        [StructLayout(LayoutKind.Sequential)]
+        public struct POINT
         {
-            // get the system DPI
-            IntPtr dDC = GetDC(IntPtr.Zero); // Get desktop DC
-            int dpi = GetDeviceCaps(dDC, 88);
-            bool rv = ReleaseDC(IntPtr.Zero, dDC);
+            public int X;
+            public int Y;
 
-            // WPF's physical unit size is calculated by taking the 
-            // "Device-Independant Unit Size" (always 1/96)
-            // and scaling it by the system DPI
-            double physicalUnitSize = (1d / 96d) * (double)dpi;
-            Point wpfUnits = new Point(physicalUnitSize * (double)x,
-                physicalUnitSize * (double)y);
-
-            return wpfUnits;
+            public POINT(int x, int y)
+            {
+                X = x;
+                Y = y;
+            }
         }
 
-        [DllImport("user32.dll", EntryPoint = "FindWindowEx")]
-        public static extern int FindWindowEx(int hwndParent, int hwndEnfant, int lpClasse, string lpTitre);
-
-        [DllImport("user32.dll", SetLastError = true)]
-        static extern IntPtr FindWindow(string lpClassName, string lpWindowName);
-
-        [DllImport("user32.dll", SetLastError = true)]
-        static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
-        const uint SWP_NOSIZE = 0x0001;
-        const uint SWP_NOZORDER = 0x0004;
-
+        [DllImport("gdi32.dll", CharSet = CharSet.Auto, SetLastError = true, ExactSpelling = true)]
+        public static extern int BitBlt(IntPtr hDC, int x, int y, int nWidth, int nHeight, IntPtr hSrcDC, int xSrc, int ySrc, int dwRop);
+        
+        public void GetColorAt(int x, int y)
+        {
+            using (Graphics gdest = Graphics.FromImage(screenPixel))
+            {
+                using (Graphics gsrc = Graphics.FromHwnd(IntPtr.Zero))
+                {
+                    IntPtr hSrcDC = gsrc.GetHdc();
+                    IntPtr hDC = gdest.GetHdc();
+                    int retval = BitBlt(hDC, 0, 0, screenPixel.Width, screenPixel.Height, hSrcDC, x, y, (int)CopyPixelOperation.SourceCopy);
+                    gdest.ReleaseHdc();
+                    gsrc.ReleaseHdc();
+                }
+            }
+        }
         #endregion
     }
     
